@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Particle Sphere — Hand Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;1,9..144,400&family=Space+Grotesk:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0a0b0e;
+    --bg-soft: #101319;
+    --line: rgba(238,236,230,0.10);
+    --ink: #eeece6;
+    --ink-dim: rgba(238,236,230,0.52);
+    --accent: #c9a86a;
+  }
+  *{ box-sizing:border-box; }
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--bg); color:var(--ink);
+    font-family:'Space Grotesk', sans-serif;
+    overflow:hidden;
+  }
+  #stage{ position:fixed; inset:0; }
+  #webcam{
+    position:fixed; inset:0; width:100%; height:100%;
+    object-fit:cover; transform:scaleX(-1);
+    opacity:0; pointer-events:none;
+    filter:brightness(0.55) saturate(1.05);
+    transition:opacity .5s ease;
+    z-index:1;
+  }
+  #webcam.on{ opacity:0.55; }
+  canvas#three-canvas{ position:fixed; inset:0; z-index:2; display:block; }
+
+  #ui{ position:fixed; inset:0; z-index:5; pointer-events:none; }
+
+  header{
+    position:absolute; top:28px; left:32px;
+    pointer-events:none;
+  }
+  h1{
+    font-family:'Fraunces', serif;
+    font-weight:500; font-style:normal;
+    font-size:26px; letter-spacing:0.2px;
+    margin:0; color:var(--ink);
+  }
+  header p{
+    margin:6px 0 0 1px;
+    font-size:11.5px; letter-spacing:0.9px; text-transform:uppercase;
+    color:var(--ink-dim); font-weight:400;
+  }
+
+  #topright{
+    position:absolute; top:26px; right:28px;
+    display:flex; align-items:center; gap:10px;
+    pointer-events:auto;
+  }
+  #status-dot{
+    width:7px; height:7px; border-radius:50%;
+    background:#6a6f7b; transition:background .3s ease, box-shadow .3s ease;
+  }
+  #status-dot.live{
+    background:var(--accent);
+    box-shadow:0 0 8px 1px rgba(201,168,106,0.7);
+  }
+  #status-label{
+    font-size:11px; letter-spacing:0.6px; text-transform:uppercase;
+    color:var(--ink-dim);
+  }
+  #bg-toggle{
+    margin-left:8px;
+    font-family:'Space Grotesk', sans-serif;
+    font-size:12px; letter-spacing:0.4px;
+    color:var(--ink); background:transparent;
+    border:1px solid var(--line);
+    padding:9px 16px; border-radius:100px;
+    cursor:pointer; pointer-events:auto;
+    transition:border-color .25s ease, background .25s ease;
+  }
+  #bg-toggle:hover{ border-color:rgba(238,236,230,0.35); background:rgba(255,255,255,0.03); }
+  #bg-toggle.active{ border-color:var(--accent); color:var(--accent); }
+
+  footer{
+    position:absolute; bottom:26px; left:0; right:0;
+    text-align:center; pointer-events:none;
+  }
+  footer p{
+    margin:0; font-size:11.5px; letter-spacing:0.5px;
+    color:var(--ink-dim);
+  }
+  footer .hint-strong{ color:var(--ink); }
+
+  #legend{
+    position:absolute; bottom:26px; left:32px;
+    pointer-events:none;
+    display:flex; flex-direction:column; gap:6px;
+  }
+  #legend .row{ display:flex; align-items:center; gap:8px; font-size:10.5px; color:var(--ink-dim); letter-spacing:0.3px; }
+  #legend .sw{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+
+  /* charge ring */
+  #chargeWrap{
+    position:fixed; top:0; left:0; width:88px; height:88px;
+    transform:translate(-44px,-44px);
+    pointer-events:none; z-index:6;
+    opacity:0; transition:opacity .15s ease;
+  }
+  #chargeWrap.show{ opacity:1; }
+  #chargeWrap svg{ width:100%; height:100%; transform:rotate(-90deg); }
+  #chargeWrap circle.track{ fill:none; stroke:rgba(238,236,230,0.14); stroke-width:2; }
+  #chargeWrap circle.fill{ fill:none; stroke:var(--accent); stroke-width:2.5; stroke-linecap:round; }
+
+  .loading{
+    position:fixed; inset:0; z-index:20;
+    background:var(--bg); display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:14px;
+    transition:opacity .6s ease;
+  }
+  .loading p{ font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--ink-dim); }
+  .spin{
+    width:22px; height:22px; border-radius:50%;
+    border:1.5px solid var(--line); border-top-color:var(--accent);
+    animation:spin 0.9s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="webcam" autoplay playsinline muted></video>
+  <canvas id="three-canvas"></canvas>
+</div>
+
+<div id="chargeWrap">
+  <svg viewBox="0 0 88 88">
+    <circle class="track" cx="44" cy="44" r="38"></circle>
+    <circle class="fill" id="chargeCircle" cx="44" cy="44" r="38" stroke-dasharray="238.76" stroke-dashoffset="238.76"></circle>
+  </svg>
+</div>
+
+<div id="ui">
+  <header>
+    <h1>Particle Sphere</h1>
+    <p>3000 points · hand-driven</p>
+  </header>
+
+  <div id="topright">
+    <span id="status-dot"></span>
+    <span id="status-label">no hand</span>
+    <button id="bg-toggle">Webcam background</button>
+  </div>
+
+  <div id="legend">
+    <div class="row"><span class="sw" style="background:#c9a86a"></span> 0 fingers</div>
+    <div class="row"><span class="sw" style="background:#7fb0e0"></span> 1 finger</div>
+    <div class="row"><span class="sw" style="background:#8fd6a3"></span> 2 fingers</div>
+    <div class="row"><span class="sw" style="background:#e0c268"></span> 3 fingers</div>
+    <div class="row"><span class="sw" style="background:#e0916a"></span> 4 fingers</div>
+    <div class="row"><span class="sw" style="background:#c98fe0"></span> 5 fingers</div>
+  </div>
+
+  <footer>
+    <p><span class="hint-strong">One hand</span> to move &amp; rotate · <span class="hint-strong">two hands</span> to grow/shrink · <span class="hint-strong">pinch &amp; hold</span> to charge, release to burst</p>
+  </footer>
+</div>
+
+<div class="loading" id="loadingScreen">
+  <div class="spin"></div>
+  <p>Starting camera</p>
+</div>
+
+<!-- Three.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- MediaPipe Hands -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+<script>
+(function(){
+
+  /* ---------------------------------------------------------------
+     THREE.JS SCENE
+  --------------------------------------------------------------- */
+  const canvas = document.getElementById('three-canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(55, window.innerWidth/window.innerHeight, 0.1, 5000);
+  camera.position.set(0, 0, 620);
+
+  const group = new THREE.Group();
+  scene.add(group);
+
+  const COUNT = 3000;
+  const BASE_RADIUS = 150;
+
+  const positions = new Float32Array(COUNT*3);
+  const colors = new Float32Array(COUNT*3);
+  const basePos = new Float32Array(COUNT*3);   // unit sphere directions
+  const explodeTarget = new Float32Array(COUNT*3);
+  const explodeStart = new Float32Array(COUNT*3);
+  const particleSeed = new Float32Array(COUNT);
+
+  // Fibonacci sphere distribution
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+  for(let i=0;i<COUNT;i++){
+    const y = 1 - (i/(COUNT-1))*2;
+    const r = Math.sqrt(Math.max(0,1-y*y));
+    const theta = GOLDEN * i;
+    const x = Math.cos(theta)*r;
+    const z = Math.sin(theta)*r;
+    basePos[i*3]=x; basePos[i*3+1]=y; basePos[i*3+2]=z;
+    positions[i*3]=x*BASE_RADIUS; positions[i*3+1]=y*BASE_RADIUS; positions[i*3+2]=z*BASE_RADIUS;
+    particleSeed[i]=Math.random();
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions,3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors,3));
+
+  const material = new THREE.PointsMaterial({
+    size: 3.1,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.92,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    sizeAttenuation: true
+  });
+
+  const points = new THREE.Points(geometry, material);
+  group.add(points);
+
+  // faint inner core glow sphere for depth
+  const coreGeo = new THREE.SphereGeometry(BASE_RADIUS*0.62, 24, 24);
+  const coreMat = new THREE.MeshBasicMaterial({ color:0x171a22, transparent:true, opacity:0.35 });
+  const core = new THREE.Mesh(coreGeo, coreMat);
+  group.add(core);
+
+  window.addEventListener('resize', ()=>{
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  /* ---------------------------------------------------------------
+     COLOR PALETTE (finger count -> color)
+  --------------------------------------------------------------- */
+  const PALETTE = [
+    new THREE.Color('#c9a86a'), // 0
+    new THREE.Color('#7fb0e0'), // 1
+    new THREE.Color('#8fd6a3'), // 2
+    new THREE.Color('#e0c268'), // 3
+    new THREE.Color('#e0916a'), // 4
+    new THREE.Color('#c98fe0')  // 5
+  ];
+  let currentColor = PALETTE[0].clone();
+  let targetColor = PALETTE[0].clone();
+
+  /* ---------------------------------------------------------------
+     STATE driven by hand tracking
+  --------------------------------------------------------------- */
+  const state = {
+    handsVisible: 0,
+    smoothPos: new THREE.Vector2(0,0),      // group position target (smoothed)
+    targetPos: new THREE.Vector2(0,0),
+    rotVelX: 0, rotVelY: 0,
+    lastHandX: null, lastHandY: null,
+    targetScale: 1, currentScale: 1,
+    fingerCount: 0,
+    pinching: false,
+    pinchStart: 0,
+    chargeLevel: 0,
+    explosionPhase: 'idle',   // idle | exploding | reforming
+    explosionT0: 0,
+    explosionMag: 1
+  };
+
+  const EXPLODE_DUR = 650;
+  const REFORM_DUR = 1300;
+
+  function triggerExplosion(mag){
+    state.explosionPhase = 'exploding';
+    state.explosionT0 = performance.now();
+    state.explosionMag = 0.5 + mag*1.6;
+    for(let i=0;i<COUNT;i++){
+      explodeStart[i*3]=positions[i*3];
+      explodeStart[i*3+1]=positions[i*3+1];
+      explodeStart[i*3+2]=positions[i*3+2];
+      const dx = basePos[i*3], dy = basePos[i*3+1], dz = basePos[i*3+2];
+      const jitter = 0.4 + Math.random()*0.9;
+      const dist = (420 + Math.random()*680) * state.explosionMag * jitter;
+      explodeTarget[i*3]   = dx*dist + (Math.random()-0.5)*160;
+      explodeTarget[i*3+1] = dy*dist + (Math.random()-0.5)*160;
+      explodeTarget[i*3+2] = dz*dist + (Math.random()-0.5)*160;
+    }
+  }
+
+  function easeOutCubic(t){ return 1 - Math.pow(1-t,3); }
+  function easeInOutCubic(t){ return t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2; }
+
+  function updateExplosion(now){
+    if(state.explosionPhase==='exploding'){
+      const t = Math.min(1, (now-state.explosionT0)/EXPLODE_DUR);
+      const e = easeOutCubic(t);
+      for(let i=0;i<COUNT;i++){
+        positions[i*3]   = explodeStart[i*3]   + (explodeTarget[i*3]-explodeStart[i*3])*e;
+        positions[i*3+1] = explodeStart[i*3+1] + (explodeTarget[i*3+1]-explodeStart[i*3+1])*e;
+        positions[i*3+2] = explodeStart[i*3+2] + (explodeTarget[i*3+2]-explodeStart[i*3+2])*e;
+      }
+      if(t>=1){
+        state.explosionPhase='reforming';
+        state.explosionT0=now;
+        for(let i=0;i<COUNT;i++){
+          explodeStart[i*3]=positions[i*3];
+          explodeStart[i*3+1]=positions[i*3+1];
+          explodeStart[i*3+2]=positions[i*3+2];
+        }
+      }
+      geometry.attributes.position.needsUpdate = true;
+      return;
+    }
+    if(state.explosionPhase==='reforming'){
+      const t = Math.min(1, (now-state.explosionT0)/REFORM_DUR);
+      const e = easeInOutCubic(t);
+      for(let i=0;i<COUNT;i++){
+        const bx = basePos[i*3]*BASE_RADIUS, by = basePos[i*3+1]*BASE_RADIUS, bz = basePos[i*3+2]*BASE_RADIUS;
+        positions[i*3]   = explodeStart[i*3]   + (bx-explodeStart[i*3])*e;
+        positions[i*3+1] = explodeStart[i*3+1] + (by-explodeStart[i*3+1])*e;
+        positions[i*3+2] = explodeStart[i*3+2] + (bz-explodeStart[i*3+2])*e;
+      }
+      if(t>=1){ state.explosionPhase='idle'; }
+      geometry.attributes.position.needsUpdate = true;
+      return;
+    }
+    // idle: gentle ambient breathing so it never looks static
+    const tt = now*0.00035;
+    for(let i=0;i<COUNT;i++){
+      const wob = 1 + Math.sin(tt + particleSeed[i]*10)*0.012;
+      positions[i*3]   = basePos[i*3]*BASE_RADIUS*wob;
+      positions[i*3+1] = basePos[i*3+1]*BASE_RADIUS*wob;
+      positions[i*3+2] = basePos[i*3+2]*BASE_RADIUS*wob;
+    }
+    geometry.attributes.position.needsUpdate = true;
+  }
+
+  function animate(){
+    requestAnimationFrame(animate);
+    const now = performance.now();
+
+    // color lerp
+    currentColor.lerp(targetColor, 0.06);
+    const arr = geometry.attributes.color.array;
+    for(let i=0;i<COUNT;i++){
+      const flicker = 0.85 + particleSeed[i]*0.3;
+      arr[i*3]   = currentColor.r*flicker;
+      arr[i*3+1] = currentColor.g*flicker;
+      arr[i*3+2] = currentColor.b*flicker;
+    }
+    geometry.attributes.color.needsUpdate = true;
+
+    updateExplosion(now);
+
+    // position / scale smoothing
+    state.smoothPos.lerp(state.targetPos, 0.09);
+    group.position.x = state.smoothPos.x;
+    group.position.y = state.smoothPos.y;
+
+    state.currentScale += (state.targetScale - state.currentScale)*0.08;
+    group.scale.setScalar(state.currentScale);
+
+    // rotation
+    group.rotation.y += state.rotVelY;
+    group.rotation.x += state.rotVelX;
+    state.rotVelY *= 0.90;
+    state.rotVelX *= 0.90;
+
+    if(state.handsVisible===0){
+      group.rotation.y += 0.0016; // slow idle spin when no hand
+    }
+
+    core.rotation.y = group.rotation.y*0.4;
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  /* ---------------------------------------------------------------
+     MEDIAPIPE HANDS
+  --------------------------------------------------------------- */
+  const videoEl = document.getElementById('webcam');
+  const statusDot = document.getElementById('status-dot');
+  const statusLabel = document.getElementById('status-label');
+  const loadingScreen = document.getElementById('loadingScreen');
+  const chargeWrap = document.getElementById('chargeWrap');
+  const chargeCircle = document.getElementById('chargeCircle');
+  const CIRC = 2*Math.PI*38;
+
+  const FINGER_TIPS = [8,12,16,20];
+  const FINGER_PIPS = [6,10,14,18];
+
+  function countFingers(lm, handedness){
+    let count = 0;
+    for(let f=0; f<4; f++){
+      if(lm[FINGER_TIPS[f]].y < lm[FINGER_PIPS[f]].y - 0.02) count++;
+    }
+    // thumb: compare x, direction depends on handedness (mirrored selfie view)
+    const thumbTip = lm[4], thumbMcp = lm[2];
+    const extendedRight = thumbTip.x < thumbMcp.x - 0.02;
+    const extendedLeft  = thumbTip.x > thumbMcp.x + 0.02;
+    if(handedness === 'Right' ? extendedRight : extendedLeft) count++;
+    return count;
+  }
+
+  function dist2D(a,b){
+    const dx=a.x-b.x, dy=a.y-b.y;
+    return Math.sqrt(dx*dx+dy*dy);
+  }
+
+  function toScreen(lm){
+    // mirrored because video is scaleX(-1)
+    return {
+      x: (1-lm.x) * window.innerWidth,
+      y: lm.y * window.innerHeight
+    };
+  }
+
+  const PINCH_ON = 0.045;
+  const PINCH_OFF = 0.07;
+  const CHARGE_MS = 950;
+
+  function onResults(results){
+    const hands = results.multiHandLandmarks || [];
+    const handedness = results.multiHandedness || [];
+    state.handsVisible = hands.length;
+
+    if(hands.length===0){
+      statusDot.classList.remove('live');
+      statusLabel.textContent = 'no hand';
+      state.lastHandX = null; state.lastHandY = null;
+      if(state.pinching){ state.pinching=false; chargeWrap.classList.remove('show'); }
+      loadingScreen.style.opacity='0';
+      setTimeout(()=>loadingScreen.style.display='none', 300);
+      return;
+    }
+
+    loadingScreen.style.opacity='0';
+    setTimeout(()=>loadingScreen.style.display='none', 300);
+    statusDot.classList.add('live');
+
+    if(hands.length===1){
+      statusLabel.textContent = '1 hand · tracking';
+      const lm = hands[0];
+      const label = handedness[0] && handedness[0].label ? handedness[0].label : 'Right';
+      const palm = lm[9];
+      const mx = (1-palm.x)*2-1;   // -1..1, mirrored
+      const my = -(palm.y*2-1);    // -1..1, inverted
+
+      state.targetPos.x = mx*260;
+      state.targetPos.y = my*180;
+
+      if(state.lastHandX!==null){
+        const dx = mx - state.lastHandX;
+        const dy = my - state.lastHandY;
+        state.rotVelY += dx*3.2;
+        state.rotVelX += -dy*3.2;
+      }
+      state.lastHandX = mx; state.lastHandY = my;
+
+      // finger count -> color
+      const fc = countFingers(lm, label);
+      state.fingerCount = fc;
+      targetColor.copy(PALETTE[Math.min(5,Math.max(0,fc))]);
+
+      // pinch detection
+      const pd = dist2D(lm[4], lm[8]);
+      const screenPt = toScreen(lm[8]);
+      chargeWrap.style.left = screenPt.x+'px';
+      chargeWrap.style.top = screenPt.y+'px';
+
+      if(!state.pinching && pd < PINCH_ON){
+        state.pinching = true;
+        state.pinchStart = performance.now();
+        chargeWrap.classList.add('show');
+      } else if(state.pinching && pd < PINCH_OFF){
+        const held = performance.now() - state.pinchStart;
+        state.chargeLevel = Math.min(1, held/CHARGE_MS);
+        const offset = CIRC*(1-state.chargeLevel);
+        chargeCircle.setAttribute('stroke-dashoffset', offset.toFixed(2));
+      } else if(state.pinching && pd >= PINCH_OFF){
+        // released
+        chargeWrap.classList.remove('show');
+        if(state.chargeLevel > 0.12){
+          triggerExplosion(state.chargeLevel);
+        }
+        state.pinching = false;
+        state.chargeLevel = 0;
+        chargeCircle.setAttribute('stroke-dashoffset', CIRC.toFixed(2));
+      }
+
+    } else if(hands.length>=2){
+      statusLabel.textContent = '2 hands · scaling';
+      const a = hands[0][9], b = hands[1][9];
+      const d = dist2D(a,b);
+      // typical spread range ~0.08 (together) to 0.75 (apart) in normalized coords
+      const norm = Math.min(1, Math.max(0, (d-0.10)/0.55));
+      state.targetScale = 0.55 + norm*1.35;
+
+      // average position still gently steers the sphere
+      const amx = (1-((a.x+b.x)/2))*2-1;
+      const amy = -(((a.y+b.y)/2)*2-1);
+      state.targetPos.x = amx*260;
+      state.targetPos.y = amy*180;
+      state.lastHandX = null; state.lastHandY = null;
+
+      if(state.pinching){
+        state.pinching=false; chargeWrap.classList.remove('show'); state.chargeLevel=0;
+      }
+    }
+  }
+
+  const hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.65,
+    minTrackingConfidence: 0.6
+  });
+  hands.onResults(onResults);
+
+  const mpCamera = new Camera(videoEl, {
+    onFrame: async () => { await hands.send({image: videoEl}); },
+    width: 640,
+    height: 480
+  });
+  mpCamera.start().catch(err=>{
+    document.querySelector('#loadingScreen p').textContent = 'Camera access needed';
+  });
+
+  /* ---------------------------------------------------------------
+     UI: webcam background toggle
+  --------------------------------------------------------------- */
+  const bgBtn = document.getElementById('bg-toggle');
+  let bgOn = false;
+  bgBtn.addEventListener('click', ()=>{
+    bgOn = !bgOn;
+    videoEl.classList.toggle('on', bgOn);
+    bgBtn.classList.toggle('active', bgOn);
+    bgBtn.textContent = bgOn ? 'Webcam background · on' : 'Webcam background';
+  });
+
+})();
+</script>
+</body>
+</html>
